@@ -14,7 +14,6 @@ import (
 		"math/rand"
 		"github.com/gorilla/mux"
 		"github.com/sirupsen/logrus"
-		"github.com/go-redis/redis/v8"
 		"github.com/t-tomalak/logrus-easy-formatter"
 )
 
@@ -22,7 +21,6 @@ type Mediaserver struct {
 		router *mux.Router
 		server *http.Server
 		logger *logrus.Logger
-		redis_client *redis.Client
 }
 
 func New(port, host, path_to_log_file, log_level string) *Mediaserver {
@@ -56,12 +54,6 @@ func New(port, host, path_to_log_file, log_level string) *Mediaserver {
 						ReadTimeout: 15*time.Second,
 				},
 				logger: logger,
-				redis_client: redis.NewClient(
-						&redis.Options{
-								Addr: "localhost:6379",
-								Password: "",
-								DB: 0,
-				}),
 		}
 }
 
@@ -119,7 +111,19 @@ func (ms *Mediaserver) upload_file(w http.ResponseWriter, r *http.Request) {
 				if err != nil {
 						ms.logger.Warn(err)
 				}
-				f, err := os.Create("./media/"+ms.gen_file_name())
+				var file_name string
+				for {
+						file_name = ms.gen_file_name()
+						_, err := os.Stat(file_name)
+				if err != nil {
+						if os.IsNotExist(err) {
+								break;
+						} else {}
+						} else {
+								continue;
+						}
+				}
+				f, err := os.Create("./media/"+file_name)
 				if err != nil {
 						ms.logger.Warn(err)
 				}
@@ -127,7 +131,7 @@ func (ms *Mediaserver) upload_file(w http.ResponseWriter, r *http.Request) {
 
 				io.Copy(f, src)
 				w.WriteHeader(http.StatusOK)
-				w.Write([]byte(`{"status":200, "msg": "file was successfuly downloaded"}`))
+				w.Write([]byte(fmt.Sprintf(`{"status":200, "msg": "file was successfuly downloaded", "file_url": "http://localhost:8002/files/get/%s"}`, file_name)))
 		} else {
 				w.Header().Set("Content-Type", "text/html")
 				w.WriteHeader(http.StatusOK)

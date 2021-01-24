@@ -14,40 +14,39 @@ import (
 		"math/rand"
 		"github.com/gorilla/mux"
 		"github.com/sirupsen/logrus"
-		//"github.com/go-redis/redis/v8"
+		"github.com/go-redis/redis/v8"
 		"github.com/t-tomalak/logrus-easy-formatter"
 )
 
 type Mediaserver struct {
 		router *mux.Router
 		server *http.Server
+		logger *logrus.Logger
+		redis_client *redis.Client
 }
 
-var logger *logrus.Logger
+func New(port, host, path_to_log_file, log_level string) *Mediaserver {
+		addr := host+port
+		r := mux.NewRouter()
 
-func init_logger() *logrus.Logger {
-		log_file, err := os.OpenFile("mediaserver.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		log_file, err := os.OpenFile(path_to_log_file, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 		if err != nil {
 				fmt.Println(err)
 				os.Exit(1)
 		}
-		return &logrus.Logger{
+		lvl, err := logrus.ParseLevel(log_level)
+		if err != nil {
+				fmt.Println(err)
+				os.Exit(1)
+		}
+		logger := &logrus.Logger{
 				Out: log_file,
-				Level: logrus.DebugLevel,
+				Level: lvl,
 				Formatter: &easy.Formatter{
 						TimestampFormat: "2017-08-01 16:51:23",
 						LogFormat: "[%lvl%]: %time% - %msg%\n",
 				},
 		}
-}
-
-func New(port, host string) *Mediaserver {
-		addr := host+port
-		r := mux.NewRouter()
-		r.HandleFunc("/files/get/{file}", return_file)
-		r.HandleFunc("/files/info/{file}", info_about_file)
-		r.HandleFunc("/files/upload", upload_file)
-		r.HandleFunc("/files/delete/{file}", delete_file)
 		return &Mediaserver{
 				router: r,
 				server: &http.Server{
@@ -56,15 +55,26 @@ func New(port, host string) *Mediaserver {
 						WriteTimeout: 15*time.Second,
 						ReadTimeout: 15*time.Second,
 				},
+				logger: logger,
+				redis_client: redis.NewClient(
+						&redis.Options{
+								Addr: "localhost:6379",
+								Password: "",
+								DB: 0,
+				}),
 		}
 }
 
 func (ms *Mediaserver) Run() {
-		logger = init_logger()
+		ms.logger.Print("server is started")
+		ms.router.HandleFunc("/files/get/{file}", ms.return_file)
+		ms.router.HandleFunc("/files/info/{file}", ms.info_about_file)
+		ms.router.HandleFunc("/files/upload", ms.upload_file)
+		ms.router.HandleFunc("/files/delete/{file}", ms.delete_file)
 		go func() {
 				if err := ms.server.ListenAndServe(); err != nil {
 						time.Sleep(7*time.Second)
-						logger.Fatal(err)
+						ms.logger.Fatal(err)
 				}
 		}()
 		c := make(chan os.Signal, 1)
@@ -73,14 +83,14 @@ func (ms *Mediaserver) Run() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		ms.server.Shutdown(ctx)
-		logger.Println("the server is shutted down")
+		ms.logger.Println("the server is shutted down")
 		os.Exit(0)
 }
 
-func return_file(w http.ResponseWriter, r *http.Request) {
+func (ms *Mediaserver) return_file(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
 		file_name := "./media/"+vars["file"]
-		logger.Debug(file_name)
+		ms.logger.Debug(file_name)
 		file, err := os.Open(file_name)
 		if err != nil {
 				w.Header().Set("Content-Type", "aplication/json")
@@ -91,7 +101,7 @@ func return_file(w http.ResponseWriter, r *http.Request) {
 				content_type := mime.TypeByExtension(path.Ext(file_name))
 				stat, err := file.Stat()
 				if err != nil {
-						logger.Warn(err)
+						ms.logger.Warn(err)
 				}
 				bytes := make([]byte, stat.Size())
 				w.Header().Set("Content-Type", content_type)
@@ -101,17 +111,17 @@ func return_file(w http.ResponseWriter, r *http.Request) {
 		}
 }
 
-func upload_file(w http.ResponseWriter, r *http.Request) {
+func (ms *Mediaserver) upload_file(w http.ResponseWriter, r *http.Request) {
 		content_type := strings.Join(r.Header["Content-Type"], "")
-		logger.Debug(content_type)
+		ms.logger.Debug(content_type)
 		if strings.Contains(content_type, "multipart/form-data") {
 				src, _, err := r.FormFile("my-file")
 				if err != nil {
-						logger.Warn(err)
+						ms.logger.Warn(err)
 				}
-				f, err := os.Create("./media/"+gen_file_name())
+				f, err := os.Create("./media/"+ms.gen_file_name())
 				if err != nil {
-						logger.Warn(err)
+						ms.logger.Warn(err)
 				}
 				defer f.Close()
 
@@ -144,7 +154,7 @@ func upload_file(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func delete_file(w http.ResponseWriter, r *http.Request) {
+func (ms *Mediaserver) delete_file(w http.ResponseWriter, r *http.Request) {
 		vars := mux.Vars(r)
 		file_name := "./media/"+vars["file"]
 		if _, err := os.Stat(file_name); os.IsNotExist(err) {
@@ -157,11 +167,11 @@ func delete_file(w http.ResponseWriter, r *http.Request) {
 		}
 }
 
-func info_about_file(w http.ResponseWriter, r *http.Request) {
+func (ms *Mediaserver) info_about_file(w http.ResponseWriter, r *http.Request) {
 
 }
 
-func gen_file_name() string {
+func (ms *Mediaserver) gen_file_name() string {
 		symbols := "ABCDEFGHIJKLMNOPQRSTUVWXYZabsdefghijklmnopqrstuvwxyz1234567890"
 		list_of_symbols := strings.Split(symbols, "")
 		rand.Seed(time.Now().UnixNano())

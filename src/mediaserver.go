@@ -5,6 +5,6 @@ import (
 )
 
 func main() {
-        mediaserver := ms.New(":8002", "localhost")
+        mediaserver := ms.New(":8002", "localhost", "mediaserver.log", "debug")
 		mediaserver.Run()
 }

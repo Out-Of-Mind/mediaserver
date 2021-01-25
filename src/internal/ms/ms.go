@@ -23,8 +23,7 @@ type Mediaserver struct {
 		logger *logrus.Logger
 }
 
-func New(port, host, path_to_log_file, log_level string) *Mediaserver {
-		addr := host+port
+func New(addr, path_to_log_file, log_level string) *Mediaserver {
 		r := mux.NewRouter()
 
 		log_file, err := os.OpenFile(path_to_log_file, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)

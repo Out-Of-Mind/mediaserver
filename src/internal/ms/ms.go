@@ -12,6 +12,8 @@ import (
 		"strings"
 		"os/signal"
 		"math/rand"
+		"encoding/hex"
+		"crypto/sha256"
 		"github.com/gorilla/mux"
 		"github.com/sirupsen/logrus"
 		"github.com/t-tomalak/logrus-easy-formatter"
@@ -40,7 +42,7 @@ func New(addr, path_to_log_file, log_level string) *Mediaserver {
 				Out: log_file,
 				Level: lvl,
 				Formatter: &easy.Formatter{
-						TimestampFormat: "2017-08-01 16:51:23",
+						TimestampFormat: "2006-01-02 15:04:05",
 						LogFormat: "[%lvl%]: %time% - %msg%\n",
 				},
 		}
@@ -62,6 +64,8 @@ func (ms *Mediaserver) Run() {
 		ms.router.HandleFunc("/files/info/{file}", ms.info_about_file)
 		ms.router.HandleFunc("/files/upload", ms.upload_file)
 		ms.router.HandleFunc("/files/delete/{file}", ms.delete_file)
+		os.RemoveAll("./media/tmp/")
+		os.MkdirAll("./media/tmp/", os.FileMode(0777))
 		go func() {
 				if err := ms.server.ListenAndServe(); err != nil {
 						time.Sleep(7*time.Second)
@@ -104,33 +108,43 @@ func (ms *Mediaserver) return_file(w http.ResponseWriter, r *http.Request) {
 
 func (ms *Mediaserver) upload_file(w http.ResponseWriter, r *http.Request) {
 		content_type := strings.Join(r.Header["Content-Type"], "")
-		ms.logger.Debug(content_type)
 		if strings.Contains(content_type, "multipart/form-data") {
 				src, _, err := r.FormFile("my-file")
-				if err != nil {
-						ms.logger.Warn(err)
-				}
-				var file_name string
-				for {
-						file_name = ms.gen_file_name()
-						_, err := os.Stat(file_name)
-				if err != nil {
-						if os.IsNotExist(err) {
-								break;
-						} else {}
-						} else {
-								continue;
-						}
-				}
-				f, err := os.Create("./media/"+file_name)
-				if err != nil {
-						ms.logger.Warn(err)
-				}
-				defer f.Close()
+				tmp_filename := "./media/tmp/"
 
-				io.Copy(f, src)
-				w.WriteHeader(http.StatusOK)
-				w.Write([]byte(fmt.Sprintf(`{"status":200, "msg": "file was successfuly downloaded", "file_url": "http://localhost:8002/files/get/%s"}`, file_name)))
+				tmp_filename += time.Now().Format("2006-01-02 15:04:05.0000000")
+				ms.logger.Print(tmp_filename)
+				f, _ := os.Create(tmp_filename)
+				_, err = io.Copy(f, src)
+				f.Close()
+				if err != nil {
+						ms.logger.Warn(err)
+				}
+				f, _ = os.Open(tmp_filename)
+				h := sha256.New()
+				if _, err := io.Copy(h, f); err != nil {
+						ms.logger.Warn(err)
+				}
+				f.Close()
+				file_hash := hex.EncodeToString(h.Sum(nil))
+				if _, err := os.Stat("./media/"+file_hash); os.IsNotExist(err) {
+						f, err := os.Create("./media/"+file_hash)
+						if err != nil {
+								ms.logger.Warn(err)
+						}
+						defer f.Close()
+
+						src, _ = os.Open(tmp_filename)
+						_, _ = io.Copy(f, src)
+						src.Close()
+						os.Remove(tmp_filename)
+						w.WriteHeader(http.StatusOK)
+						w.Write([]byte(fmt.Sprintf(`{"status": 200, "msg": "file was successfuly downloaded", "file_url": "http://localhost:8002/files/get/%s"}`, file_hash)))
+				} else {
+						os.Remove(tmp_filename)
+						w.WriteHeader(http.StatusOK)
+						w.Write([]byte(fmt.Sprintf(`{"status": 200, "msg": "file is already exists", "file_url": "http://localhost:8002/files/get/%s"}`, file_hash)))
+				}
 		} else {
 				w.Header().Set("Content-Type", "text/html")
 				w.WriteHeader(http.StatusOK)
